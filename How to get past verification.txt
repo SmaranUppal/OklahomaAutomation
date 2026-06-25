@@ -1,0 +1,1 @@
+It will work for a while, but then will give a cloudflare popup for auto verification. If I open it and verify then go back to the code it will work. I think it verifies the ip of the user for a certain amount of time before rechecking. So, in that window it will work.
