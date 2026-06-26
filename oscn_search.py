@@ -30,6 +30,8 @@ import math
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pyautogui
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -368,49 +370,57 @@ def handle_cloudflare(driver):
                 print(f"   ⚠️  Could not click Submit: {e}")
             break
 
-        # ── Click checkbox using visual position (shadow DOM blocks Selenium) ──
-        # The Cloudflare widget is inside a closed shadow root so Selenium
-        # cannot find any elements inside it. We use fixed visual coordinates
-        # based on the known page layout (maximized Chrome, 1920x1200 screen).
+        # ── Click checkbox using screenshot + template matching ───────────────
+        # Works on any screen size — takes a screenshot and finds the checkbox
+        # visually, then clicks it with human-like mouse movement.
         checkbox_clicked = False
         try:
-            # Get actual toolbar height (outerHeight - innerHeight)
-            win_x     = driver.execute_script("return window.screenX || window.screenLeft;")
-            win_y     = driver.execute_script("return window.screenY || window.screenTop;")
-            outer_h   = driver.execute_script("return window.outerHeight;")
-            inner_h   = driver.execute_script("return window.innerHeight;")
-            outer_w   = driver.execute_script("return window.outerWidth;")
-            toolbar_h = outer_h - inner_h
+            template_path = Path(__file__).parent / "cf_checkbox_template.png"
+            if not template_path.exists():
+                print(f"   ⚠️  Template not found at {template_path}")
+            else:
+                # Take a full screenshot
+                screenshot = pyautogui.screenshot()
+                screen_np  = np.array(screenshot)
+                screen_bgr = cv2.cvtColor(screen_np, cv2.COLOR_RGB2BGR)
 
-            # Cloudflare widget is centered horizontally on the page
-            # Checkbox is ~120px left of the page center
-            page_center_x = win_x + outer_w // 2
-            checkbox_x    = page_center_x - 120 + random.randint(-3, 3)
+                # Load template and match
+                template  = cv2.imread(str(template_path))
+                gray_screen = cv2.cvtColor(screen_bgr, cv2.COLOR_BGR2GRAY)
+                gray_tmpl   = cv2.cvtColor(template,   cv2.COLOR_BGR2GRAY)
 
-            # Widget appears ~230px from top of content area
-            checkbox_y    = win_y + toolbar_h + 234 + random.randint(-3, 3)
+                result = cv2.matchTemplate(gray_screen, gray_tmpl, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
-            print(f"   🖱️  Clicking checkbox at ({checkbox_x}, {checkbox_y}) "
-                  f"[toolbar={toolbar_h}px, win=({win_x},{win_y})]")
+                print(f"   🔍 Template match confidence: {max_val:.3f}")
 
-            # Wander mouse around first (looks more human)
-            cur_x, cur_y = pyautogui.position()
-            for _ in range(random.randint(2, 4)):
-                pyautogui.moveTo(
-                    cur_x + random.randint(-200, 200),
-                    cur_y + random.randint(-150, 150),
-                    duration=random.uniform(0.3, 0.7)
-                )
-                time.sleep(random.uniform(0.1, 0.4))
+                if max_val >= 0.7:
+                    # Found it — calculate center of matched region
+                    th, tw = template.shape[:2]
+                    cb_x   = max_loc[0] + tw // 2
+                    cb_y   = max_loc[1] + th // 2
+                    print(f"   🖱️  Checkbox found at screen ({cb_x}, {cb_y}) — moving mouse...")
 
-            # Move to checkbox with natural Bezier curve and click
-            human_move_and_click(checkbox_x, checkbox_y)
-            checkbox_clicked = True
-            print("   🖱️  Checkbox area clicked — waiting for verification...")
-            time.sleep(4)
+                    # Wander mouse around first (looks more human)
+                    cur_x, cur_y = pyautogui.position()
+                    for _ in range(random.randint(2, 4)):
+                        pyautogui.moveTo(
+                            cur_x + random.randint(-200, 200),
+                            cur_y + random.randint(-150, 150),
+                            duration=random.uniform(0.3, 0.7)
+                        )
+                        time.sleep(random.uniform(0.1, 0.4))
+
+                    # Click with natural Bezier movement
+                    human_move_and_click(cb_x, cb_y)
+                    checkbox_clicked = True
+                    print("   🖱️  Checkbox clicked — waiting for verification...")
+                    time.sleep(4)
+                else:
+                    print(f"   ⚠️  Checkbox not found in screenshot (confidence {max_val:.3f} < 0.7)")
 
         except Exception as e:
-            print(f"   ⚠️  Error clicking checkbox: {e}")
+            print(f"   ⚠️  Error during template match click: {e}")
 
         # ── Fallback: check inside iframes ────────────────────────────────────
         if not checkbox_clicked:
